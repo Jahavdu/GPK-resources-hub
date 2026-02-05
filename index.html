@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Mechatronics by Durvesh</title>
+    <!-- Firebase SDK v9+ Modular -->
+    <script type="module">
+        // Firebase will be initialized in the main script section below
+        window.firebaseLoaded = true;
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         /* --- CSS VARIABLES --- */
@@ -210,6 +217,71 @@
     </div>
 
     <script>
+        /*
+        ===========================================
+        FIREBASE CONFIGURATION SETUP
+        ===========================================
+        ⚠️ IMPORTANT: Firebase is NOT configured. The app is currently using 
+        localStorage as a fallback. To enable cloud sync, follow these steps:
+
+        1. Go to https://console.firebase.google.com/
+        2. Create a new project (or use existing)
+        3. Enable Firestore Database in Build > Firestore Database
+        4. Set rules to test mode initially (update for production later)
+        5. Go to Project Settings > General > Your apps
+        6. Register a web app and copy the Firebase config
+        7. Replace the firebaseConfig object below with your credentials
+
+        FIRESTORE SECURITY RULES (for testing - CHANGE FOR PRODUCTION):
+        rules_version = '2';
+        service cloud.firestore {
+          match /databases/{database}/documents {
+            match /{document=**} {
+              allow read, write: if true; // ⚠️ INSECURE - Change for production!
+            }
+          }
+        }
+
+        RECOMMENDED PRODUCTION RULES:
+        rules_version = '2';
+        service cloud.firestore {
+          match /databases/{database}/documents {
+            match /{document=**} {
+              allow read: if request.auth != null;
+              allow write: if request.auth != null;
+            }
+          }
+        }
+
+        ⚠️ SECURITY WARNING: 
+        - Default admin accounts use hardcoded passwords (admin123, team123)
+        - CHANGE THESE PASSWORDS IMMEDIATELY after first deployment
+        - Consider implementing Firebase Authentication for better security
+        ===========================================
+        */
+
+        /* --- FIREBASE INITIALIZATION --- */
+        const firebaseConfig = {
+          apiKey: "YOUR_API_KEY",
+          authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+          projectId: "YOUR_PROJECT_ID",
+          storageBucket: "YOUR_PROJECT_ID.appspot.com",
+          messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+          appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        let firebaseApp, firestoreDb;
+        try {
+            firebaseApp = firebase.initializeApp(firebaseConfig);
+            firestoreDb = firebase.firestore();
+            console.log('✅ Firebase initialized successfully - Cloud sync enabled');
+        } catch (error) {
+            console.error('❌ Firebase initialization error:', error);
+            console.warn('⚠️ FALLBACK MODE: Using localStorage. Data will NOT sync across devices.');
+            console.warn('⚠️ Configure Firebase to enable cloud storage. See configuration instructions above.');
+        }
+
         /* --- UTILS --- */
         const BAD_WORDS = ['bad', 'stupid', 'idiot', 'fail', 'trash', 'useless', 'kill', 'dumb'];
         const showToast = (msg) => {
@@ -223,26 +295,130 @@
         };
 
         /* --- DATABASE --- */
+        // Firestore-based database operations with localStorage fallback (async)
         const db = {
-            getData: (k) => JSON.parse(localStorage.getItem(k)) || [],
-            saveData: (k, d) => localStorage.setItem(k, JSON.stringify(d)),
-            pushItem: (k, i) => { const l=db.getData(k); k.includes('posts')?l.unshift(i):l.push(i); db.saveData(k,l); },
-            updateUser: (name, data) => { 
-                let l = db.getData('nexus_users'); let idx = l.findIndex(u=>u.name===name); 
-                if(idx!==-1) { l[idx] = {...l[idx], ...data}; db.saveData('nexus_users', l); }
+            // Get all documents from a collection
+            getData: async (k) => {
+                try {
+                    // Use Firestore if available
+                    if (firestoreDb) {
+                        const snapshot = await firestoreDb.collection(k).get();
+                        return snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() }));
+                    }
+                    // Fallback to localStorage
+                    return JSON.parse(localStorage.getItem(k)) || [];
+                } catch (error) {
+                    console.error(`Error getting data from ${k}:`, error);
+                    // Fallback to localStorage on error
+                    return JSON.parse(localStorage.getItem(k)) || [];
+                }
+            },
+
+            // Save entire array to collection (replaces all documents)
+            saveData: async (k, d) => {
+                try {
+                    if (firestoreDb) {
+                        const batch = firestoreDb.batch();
+                        
+                        // Delete all existing documents
+                        const existing = await firestoreDb.collection(k).get();
+                        existing.docs.forEach(doc => batch.delete(doc.ref));
+                        
+                        // Add new documents
+                        d.forEach(item => {
+                            const docRef = firestoreDb.collection(k).doc();
+                            batch.set(docRef, item);
+                        });
+                        
+                        await batch.commit();
+                    } else {
+                        // Fallback to localStorage
+                        localStorage.setItem(k, JSON.stringify(d));
+                    }
+                } catch (error) {
+                    console.error(`Error saving data to ${k}:`, error);
+                    // Fallback to localStorage on error
+                    localStorage.setItem(k, JSON.stringify(d));
+                }
+            },
+
+            // Push a new item to collection
+            pushItem: async (k, i) => {
+                try {
+                    if (firestoreDb) {
+                        // For Firestore, add the document
+                        await firestoreDb.collection(k).add(i);
+                    } else {
+                        // Fallback to localStorage
+                        const l = JSON.parse(localStorage.getItem(k)) || [];
+                        k.includes('posts') ? l.unshift(i) : l.push(i);
+                        localStorage.setItem(k, JSON.stringify(l));
+                    }
+                } catch (error) {
+                    console.error(`Error pushing item to ${k}:`, error);
+                    // Fallback to localStorage on error
+                    const l = JSON.parse(localStorage.getItem(k)) || [];
+                    k.includes('posts') ? l.unshift(i) : l.push(i);
+                    localStorage.setItem(k, JSON.stringify(l));
+                }
+            },
+
+            // Update a specific user by name
+            updateUser: async (name, data) => {
+                try {
+                    if (firestoreDb) {
+                        const snapshot = await firestoreDb.collection('nexus_users')
+                            .where('name', '==', name)
+                            .get();
+                        
+                        if (!snapshot.empty) {
+                            const doc = snapshot.docs[0];
+                            await doc.ref.update(data);
+                        }
+                    } else {
+                        // Fallback to localStorage
+                        let l = JSON.parse(localStorage.getItem('nexus_users')) || [];
+                        let idx = l.findIndex(u => u.name === name);
+                        if (idx !== -1) {
+                            l[idx] = { ...l[idx], ...data };
+                            localStorage.setItem('nexus_users', JSON.stringify(l));
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Error updating user ${name}:`, error);
+                    // Fallback to localStorage on error
+                    let l = JSON.parse(localStorage.getItem('nexus_users')) || [];
+                    let idx = l.findIndex(u => u.name === name);
+                    if (idx !== -1) {
+                        l[idx] = { ...l[idx], ...data };
+                        localStorage.setItem('nexus_users', JSON.stringify(l));
+                    }
+                }
             }
         };
 
-        if (db.getData('nexus_users').length === 0) {
-            db.pushItem('nexus_users', { name: 'Durvesh Jadhav', role: 'admin', type: 'main', pass: 'admin123', badges: ['FOUNDER'], uploads: 99 });
-            db.pushItem('nexus_users', { name: 'Team', role: 'admin', type: 'sec', pass: 'team123', badges: ['ADMIN'], uploads: 0 });
+        // Initialize default admin users (runs on app init)
+        async function initializeDefaultUsers() {
+            try {
+                const users = await db.getData('nexus_users');
+                if (users.length === 0) {
+                    await db.pushItem('nexus_users', { name: 'Durvesh Jadhav', role: 'admin', type: 'main', pass: 'admin123', badges: ['FOUNDER'], uploads: 99 });
+                    await db.pushItem('nexus_users', { name: 'Team', role: 'admin', type: 'sec', pass: 'team123', badges: ['ADMIN'], uploads: 0 });
+                    console.log('Default admin users created');
+                }
+            } catch (error) {
+                console.error('Error initializing default users:', error);
+            }
         }
 
         /* --- APP CONTROLLER --- */
         const app = {
             currentUser: null, adminTab: 'approvals',
 
-            init: () => {
+            init: async () => {
+                // Initialize default admin users if needed
+                await initializeDefaultUsers();
+                
                 const s = sessionStorage.getItem('nexus_session');
                 if(s) app.login(JSON.parse(s), true);
                 else app.renderLogin();
@@ -276,8 +452,25 @@
             },
             toggleAuth: (v) => { ['login-form','register-form','founder-form'].forEach(id=>document.getElementById(id).style.display='none'); document.getElementById(v+'-form').style.display='block'; },
             
-            handleLogin: (e) => { e.preventDefault(); const u = db.getData('nexus_users').find(x => x.name === document.getElementById('l_name').value && x.pass === document.getElementById('l_pass').value); u ? app.login(u) : showToast('Invalid Login'); },
-            handleRegister: (e) => { e.preventDefault(); db.pushItem('nexus_users', {name:document.getElementById('r_name').value, dept:document.getElementById('r_dept').value, role:'student', pass:document.getElementById('r_pass').value, badges:['NEW'], uploads:0}); showToast('Registered!'); app.toggleAuth('login'); },
+            handleLogin: async (e) => { 
+                e.preventDefault(); 
+                const users = await db.getData('nexus_users'); 
+                const u = users.find(x => x.name === document.getElementById('l_name').value && x.pass === document.getElementById('l_pass').value); 
+                u ? app.login(u) : showToast('Invalid Login'); 
+            },
+            handleRegister: async (e) => { 
+                e.preventDefault(); 
+                await db.pushItem('nexus_users', {
+                    name:document.getElementById('r_name').value, 
+                    dept:document.getElementById('r_dept').value, 
+                    role:'student', 
+                    pass:document.getElementById('r_pass').value, 
+                    badges:['NEW'], 
+                    uploads:0
+                }); 
+                showToast('Registered!'); 
+                app.toggleAuth('login'); 
+            },
             handleFounderLogin: (e) => { 
                 e.preventDefault(); 
                 const u = document.getElementById('f_name').value; const p = document.getElementById('f_pass').value;
@@ -291,15 +484,15 @@
             navigate: (v) => { document.querySelectorAll('.bottom-nav button, .desktop-links button').forEach(b => b.classList.remove('active')); const mobBtn = document.getElementById('mob-'+v); if(mobBtn) mobBtn.classList.add('active'); if(v === 'admin') document.getElementById('desk-admin-btn').classList.add('active'); else { const buttons = Array.from(document.querySelectorAll('.desktop-links button')); const target = buttons.find(b => b.textContent.toLowerCase().includes(v) && b.id !== 'desk-admin-btn'); if(target) target.classList.add('active'); } window.scrollTo(0,0); app['render'+v.charAt(0).toUpperCase()+v.slice(1)](); },
 
             /* --- VIEWS --- */
-            renderHome: () => {
-                const list = db.getData('nexus_materials').filter(m => m.status==='approved');
+            renderHome: async () => {
+                const list = (await db.getData('nexus_materials')).filter(m => m.status==='approved');
                 let html = `<div class="animate-enter"><h2 style="margin-bottom:20px;">Library</h2><div class="grid">`;
                 list.forEach((m, i) => html += `<div class="card clickable stagger-${(i%3)+1}" onclick="app.openPostModal('note', ${m.id})"><span class="tag">${m.category}</span><h3>${m.title}</h3><p style="color:var(--text-muted); font-size:0.9rem;">${m.desc||'No details'}</p><div style="margin-top:10px; display:flex; justify-content:space-between;"><small onclick="event.stopPropagation(); app.openProfile('${m.author}')" class="clickable" style="color:var(--accent)">${m.author}</small><small style="color:var(--success)">Tap to View</small></div></div>`);
                 document.getElementById('app-root').innerHTML = html + `</div></div>`;
             },
             
-            renderProjects: () => {
-                const list = db.getData('nexus_projects');
+            renderProjects: async () => {
+                const list = await db.getData('nexus_projects');
                 const isMain = app.currentUser.type === 'main';
                 let html = `<div class="animate-enter"><div style="display:flex; justify-content:space-between; margin-bottom:20px;"><h2>Projects</h2><button class="btn btn-primary" onclick="document.getElementById('pf').style.display='block'">+ Add</button></div>
                 <div id="pf" style="display:none; background:var(--card-bg); padding:20px; border-radius:15px; margin-bottom:20px;"><form onsubmit="app.addProj(event)"><input id="pt" placeholder="Title" required><textarea id="pd" placeholder="Desc" required></textarea><button class="btn btn-primary">Submit</button></form></div><div class="grid">`;
@@ -307,8 +500,8 @@
                 document.getElementById('app-root').innerHTML = html + `</div></div>`;
             },
 
-            renderForum: () => {
-                const list = db.getData('nexus_posts').filter(p=>p.status!=='deleted');
+            renderForum: async () => {
+                const list = (await db.getData('nexus_posts')).filter(p=>p.status!=='deleted');
                 let html = `<div class="animate-enter"><h2 style="margin-bottom:20px;">Forum</h2><div class="card" style="margin-bottom:20px; padding:15px;"><form style="display:flex; gap:10px;" onsubmit="app.addPost(event)"><input id="p_txt" placeholder="Start a discussion..." required style="margin:0; border-radius:50px;"><button class="btn btn-primary" style="border-radius:50%; width:50px;">➤</button></form></div><div>`;
                 list.forEach((p, i) => {
                     const replies = (p.replies || []).length;
@@ -318,8 +511,8 @@
                 document.getElementById('app-root').innerHTML = html + `</div></div>`;
             },
 
-            renderEvents: () => {
-                 const evs = db.getData('nexus_events');
+            renderEvents: async () => {
+                 const evs = await db.getData('nexus_events');
                  let html = `<div class="animate-enter"><h2>Events</h2><div style="margin-top:20px;">`;
                  if(evs.length===0) html+=`<p style="color:var(--text-muted)">No events yet.</p>`;
                  evs.forEach(e => html += `<div class="card"><h3>${e.title}</h3><p style="color:var(--text-muted)">${e.desc}</p></div>`);
@@ -348,9 +541,9 @@
 
             renderProfile: () => { app.openProfile(app.currentUser.name, true); },
 
-            renderAdmin: () => {
-                const pend = db.getData('nexus_materials').filter(m=>m.status==='pending');
-                const users = db.getData('nexus_users').filter(u=>u.role!=='admin');
+            renderAdmin: async () => {
+                const pend = (await db.getData('nexus_materials')).filter(m=>m.status==='pending');
+                const users = (await db.getData('nexus_users')).filter(u=>u.role!=='admin');
                 const isMain = app.currentUser.type === 'main';
 
                 let content = '';
@@ -371,13 +564,14 @@
             },
 
             /* --- SUBREDDIT-STYLE MODAL --- */
-            openPostModal: (type, id) => {
+            openPostModal: async (type, id) => {
                 document.getElementById('modal-overlay').classList.add('active');
                 const content = document.getElementById('modal-body');
                 const isMain = app.currentUser.type === 'main';
                 
                 if(type === 'post') {
-                    const p = db.getData('nexus_posts').find(x=>x.id===id);
+                    const posts = await db.getData('nexus_posts');
+                    const p = posts.find(x=>x.id===id);
                     const badge = p.badge ? `<span class="badge ${p.badge==='Legit'?'bg-blue':'bg-green'}">${p.badge}</span>` : '';
                     let html = `<div class="thread-header"><h2 class="thread-title">${p.title || 'Discussion'}</h2><div class="thread-meta">Posted by <span class="clickable" style="color:var(--accent)" onclick="app.openProfile('${p.author}')">${p.author}</span> ${badge}</div></div>`;
                     html += `<div style="font-size:1.1rem; line-height:1.6; margin-bottom:20px;">${p.content}</div>`;
@@ -388,18 +582,21 @@
                     html += `<form onsubmit="app.addReply(event, ${p.id}, 'post')" style="display:flex; gap:10px; margin-top:20px;"><input placeholder="Add a comment..." required style="margin:0;"><button class="btn btn-primary">Reply</button></form>`;
                     content.innerHTML = html;
                 } else if(type === 'project') {
-                    const p = db.getData('nexus_projects').find(x=>x.id===id);
+                    const projects = await db.getData('nexus_projects');
+                    const p = projects.find(x=>x.id===id);
                     let html = `<h2>${p.title}</h2><p style="color:var(--text-muted)">Project by <strong onclick="app.openProfile('${p.author}')" class="clickable">${p.author}</strong></p><p style="margin:20px 0;">${p.desc}</p><h4>Gallery</h4><div class="img-grid"><div style="width:100%; height:200px; background:rgba(255,255,255,0.05); display:flex; align-items:center; justify-content:center; border-radius:10px;">Project Image Placeholder</div></div><div style="margin-top:20px;"><h4>Feedback</h4>${(p.comments||[]).map(c=>`<div class="comment-item"><strong>${c.author}:</strong> ${c.content}</div>`).join('')}</div><form onsubmit="app.addReply(event, ${p.id}, 'project')" style="display:flex; gap:10px; margin-top:20px;"><input placeholder="Comment..." required style="margin:0;"><button class="btn btn-primary">Send</button></form>`;
                     content.innerHTML = html;
                 } else if(type === 'note') {
-                    const m = db.getData('nexus_materials').find(x=>x.id===id);
+                    const materials = await db.getData('nexus_materials');
+                    const m = materials.find(x=>x.id===id);
                     content.innerHTML = `<h2>${m.title}</h2><span class="tag">${m.category}</span><p style="margin:20px 0; line-height:1.6;">${m.desc||'No description.'}</p><button class="btn btn-primary" style="width:100%" onclick="app.downloadFile('${m.title}')">Download File</button>`;
                 }
             },
 
-            openProfile: (name, isSelf=false) => {
+            openProfile: async (name, isSelf=false) => {
                 if(!name) name = app.currentUser.name; 
-                const u = db.getData('nexus_users').find(x=>x.name===name) || {name:name, role:'student', badges:[], uploads:0};
+                const users = await db.getData('nexus_users');
+                const u = users.find(x=>x.name===name) || {name:name, role:'student', badges:[], uploads:0};
                 let badgesHTML = (u.badges||[]).map(b=>`<span class="badge bg-blue">${b}</span>`).join('');
                 if(u.uploads >= 5) badgesHTML += `<span class="badge bg-green">CONTRIBUTOR</span>`;
                 
@@ -413,29 +610,105 @@
             },
 
             /* --- ACTIONS --- */
-            addProj: (e) => { e.preventDefault(); db.pushItem('nexus_projects',{id:Date.now(), title:document.getElementById('pt').value, desc:document.getElementById('pd').value, author:app.currentUser.name, comments:[]}); app.renderProjects(); },
-            addPost: (e) => { e.preventDefault(); const t=document.getElementById('p_txt').value, c=filterProfanity(t); db.pushItem('nexus_posts',{id:Date.now(), author:app.currentUser.name, content:c.count>4?t:c.text, status:c.count>4?'flagged':'active', legits:[], dislikes:[], replies:[]}); app.renderForum(); },
-            
-            addReply: (e, id, type) => {
-                e.preventDefault(); const val = e.target.querySelector('input').value;
-                if(type === 'post') { let l=db.getData('nexus_posts'); l.find(p=>p.id===id).replies.push({author:app.currentUser.name, content:val}); db.saveData('nexus_posts',l); }
-                else { let l=db.getData('nexus_projects'); l.find(p=>p.id===id).comments.push({author:app.currentUser.name, content:val}); db.saveData('nexus_projects',l); }
-                app.openPostModal(type, id); // Refresh
-            },
-
-            setBadge: (id, b) => { let l=db.getData('nexus_posts'); l.find(p=>p.id===id).badge=b; db.saveData('nexus_posts',l); showToast('Badge Added'); app.openPostModal('post', id); },
-            giveUserBadge: (name, b) => { let l=db.getData('nexus_users'); let u=l.find(x=>x.name===name); if(u && !u.badges.includes(b)) u.badges.push(b); db.saveData('nexus_users',l); showToast('Badge Assigned'); },
-
-            doUpload: (e) => { 
+            addProj: async (e) => { 
                 e.preventDefault(); 
-                db.pushItem('nexus_materials',{id:Date.now(), title:document.getElementById('ut').value, category:document.getElementById('uc').value, desc:document.getElementById('ud').value, author:app.currentUser.name, status:'pending'});
-                let users = db.getData('nexus_users'); let me = users.find(u=>u.name===app.currentUser.name); if(me) me.uploads = (me.uploads||0)+1; db.saveData('nexus_users', users);
-                showToast('Submitted'); app.navigate('home'); 
+                await db.pushItem('nexus_projects',{
+                    id:Date.now(), 
+                    title:document.getElementById('pt').value, 
+                    desc:document.getElementById('pd').value, 
+                    author:app.currentUser.name, 
+                    comments:[]
+                }); 
+                await app.renderProjects(); 
+            },
+            addPost: async (e) => { 
+                e.preventDefault(); 
+                const t=document.getElementById('p_txt').value, c=filterProfanity(t); 
+                await db.pushItem('nexus_posts',{
+                    id:Date.now(), 
+                    author:app.currentUser.name, 
+                    content:c.count>4?t:c.text, 
+                    status:c.count>4?'flagged':'active', 
+                    legits:[], 
+                    dislikes:[], 
+                    replies:[]
+                }); 
+                await app.renderForum(); 
+            },
+            
+            addReply: async (e, id, type) => {
+                e.preventDefault(); 
+                const val = e.target.querySelector('input').value;
+                if(type === 'post') { 
+                    let l = await db.getData('nexus_posts'); 
+                    l.find(p=>p.id===id).replies.push({author:app.currentUser.name, content:val}); 
+                    await db.saveData('nexus_posts',l); 
+                }
+                else { 
+                    let l = await db.getData('nexus_projects'); 
+                    l.find(p=>p.id===id).comments.push({author:app.currentUser.name, content:val}); 
+                    await db.saveData('nexus_projects',l); 
+                }
+                await app.openPostModal(type, id); // Refresh
             },
 
-            addEvt: (e) => { e.preventDefault(); db.pushItem('nexus_events',{title:document.getElementById('et').value, desc:document.getElementById('ed').value}); showToast('Event Created'); },
-            admDecide: (id, s) => { let l=db.getData('nexus_materials'); if(s==='reject') l=l.filter(m=>m.id!==id); else l.find(m=>m.id===id).status='approved'; db.saveData('nexus_materials',l); app.renderAdmin(); },
-            delItem: (k, id) => { if(confirm('Delete?')) { let l=db.getData(k).filter(i=>i.id!==id); db.saveData(k,l); document.getElementById('modal-overlay').classList.remove('active'); k.includes('proj')?app.renderProjects():app.renderForum(); showToast('Deleted'); } },
+            setBadge: async (id, b) => { 
+                let l = await db.getData('nexus_posts'); 
+                l.find(p=>p.id===id).badge=b; 
+                await db.saveData('nexus_posts',l); 
+                showToast('Badge Added'); 
+                await app.openPostModal('post', id); 
+            },
+            giveUserBadge: async (name, b) => { 
+                let l = await db.getData('nexus_users'); 
+                let u=l.find(x=>x.name===name); 
+                if(u && !u.badges.includes(b)) u.badges.push(b); 
+                await db.saveData('nexus_users',l); 
+                showToast('Badge Assigned'); 
+            },
+
+            doUpload: async (e) => { 
+                e.preventDefault(); 
+                await db.pushItem('nexus_materials',{
+                    id:Date.now(), 
+                    title:document.getElementById('ut').value, 
+                    category:document.getElementById('uc').value, 
+                    desc:document.getElementById('ud').value, 
+                    author:app.currentUser.name, 
+                    status:'pending'
+                });
+                let users = await db.getData('nexus_users'); 
+                let me = users.find(u=>u.name===app.currentUser.name); 
+                if(me) me.uploads = (me.uploads||0)+1; 
+                await db.saveData('nexus_users', users);
+                showToast('Submitted'); 
+                app.navigate('home'); 
+            },
+
+            addEvt: async (e) => { 
+                e.preventDefault(); 
+                await db.pushItem('nexus_events',{
+                    title:document.getElementById('et').value, 
+                    desc:document.getElementById('ed').value
+                }); 
+                showToast('Event Created'); 
+            },
+            admDecide: async (id, s) => { 
+                let l = await db.getData('nexus_materials'); 
+                if(s==='reject') l=l.filter(m=>m.id!==id); 
+                else l.find(m=>m.id===id).status='approved'; 
+                await db.saveData('nexus_materials',l); 
+                await app.renderAdmin(); 
+            },
+            delItem: async (k, id) => { 
+                if(confirm('Delete?')) { 
+                    let l = (await db.getData(k)).filter(i=>i.id!==id); 
+                    await db.saveData(k,l); 
+                    document.getElementById('modal-overlay').classList.remove('active'); 
+                    k.includes('proj') ? await app.renderProjects() : await app.renderForum(); 
+                    showToast('Deleted'); 
+                } 
+            },
 
             downloadFile: (title) => {
                 const blob = new Blob([`Simulated PDF Content: ${title}\nDownloaded from Mechatronics Hub`], { type: 'text/plain' });
