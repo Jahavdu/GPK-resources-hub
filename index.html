@@ -259,7 +259,7 @@
             console.log('Firebase initialized successfully');
         } catch (error) {
             console.error('Firebase initialization error:', error);
-            alert('Firebase not configured. Please add your Firebase credentials in the script section.');
+            // Firebase not configured or not available - app will use in-memory storage
         }
 
         /* --- UTILS --- */
@@ -275,69 +275,104 @@
         };
 
         /* --- DATABASE --- */
-        // Firestore-based database operations (async)
+        // Firestore-based database operations with localStorage fallback (async)
         const db = {
             // Get all documents from a collection
             getData: async (k) => {
                 try {
-                    if (!firestoreDb) return [];
-                    const snapshot = await firestoreDb.collection(k).get();
-                    return snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() }));
+                    // Use Firestore if available
+                    if (firestoreDb) {
+                        const snapshot = await firestoreDb.collection(k).get();
+                        return snapshot.docs.map(doc => ({ docId: doc.id, ...doc.data() }));
+                    }
+                    // Fallback to localStorage
+                    return JSON.parse(localStorage.getItem(k)) || [];
                 } catch (error) {
                     console.error(`Error getting data from ${k}:`, error);
-                    return [];
+                    // Fallback to localStorage on error
+                    return JSON.parse(localStorage.getItem(k)) || [];
                 }
             },
 
             // Save entire array to collection (replaces all documents)
             saveData: async (k, d) => {
                 try {
-                    if (!firestoreDb) return;
-                    const batch = firestoreDb.batch();
-                    
-                    // Delete all existing documents
-                    const existing = await firestoreDb.collection(k).get();
-                    existing.docs.forEach(doc => batch.delete(doc.ref));
-                    
-                    // Add new documents
-                    d.forEach(item => {
-                        const docRef = firestoreDb.collection(k).doc();
-                        batch.set(docRef, item);
-                    });
-                    
-                    await batch.commit();
+                    if (firestoreDb) {
+                        const batch = firestoreDb.batch();
+                        
+                        // Delete all existing documents
+                        const existing = await firestoreDb.collection(k).get();
+                        existing.docs.forEach(doc => batch.delete(doc.ref));
+                        
+                        // Add new documents
+                        d.forEach(item => {
+                            const docRef = firestoreDb.collection(k).doc();
+                            batch.set(docRef, item);
+                        });
+                        
+                        await batch.commit();
+                    } else {
+                        // Fallback to localStorage
+                        localStorage.setItem(k, JSON.stringify(d));
+                    }
                 } catch (error) {
                     console.error(`Error saving data to ${k}:`, error);
+                    // Fallback to localStorage on error
+                    localStorage.setItem(k, JSON.stringify(d));
                 }
             },
 
             // Push a new item to collection
             pushItem: async (k, i) => {
                 try {
-                    if (!firestoreDb) return;
-                    
-                    // For posts, we need to maintain order (newest first)
-                    // For other collections, just add the document
-                    await firestoreDb.collection(k).add(i);
+                    if (firestoreDb) {
+                        // For Firestore, add the document
+                        await firestoreDb.collection(k).add(i);
+                    } else {
+                        // Fallback to localStorage
+                        const l = JSON.parse(localStorage.getItem(k)) || [];
+                        k.includes('posts') ? l.unshift(i) : l.push(i);
+                        localStorage.setItem(k, JSON.stringify(l));
+                    }
                 } catch (error) {
                     console.error(`Error pushing item to ${k}:`, error);
+                    // Fallback to localStorage on error
+                    const l = JSON.parse(localStorage.getItem(k)) || [];
+                    k.includes('posts') ? l.unshift(i) : l.push(i);
+                    localStorage.setItem(k, JSON.stringify(l));
                 }
             },
 
             // Update a specific user by name
             updateUser: async (name, data) => {
                 try {
-                    if (!firestoreDb) return;
-                    const snapshot = await firestoreDb.collection('nexus_users')
-                        .where('name', '==', name)
-                        .get();
-                    
-                    if (!snapshot.empty) {
-                        const doc = snapshot.docs[0];
-                        await doc.ref.update(data);
+                    if (firestoreDb) {
+                        const snapshot = await firestoreDb.collection('nexus_users')
+                            .where('name', '==', name)
+                            .get();
+                        
+                        if (!snapshot.empty) {
+                            const doc = snapshot.docs[0];
+                            await doc.ref.update(data);
+                        }
+                    } else {
+                        // Fallback to localStorage
+                        let l = JSON.parse(localStorage.getItem('nexus_users')) || [];
+                        let idx = l.findIndex(u => u.name === name);
+                        if (idx !== -1) {
+                            l[idx] = { ...l[idx], ...data };
+                            localStorage.setItem('nexus_users', JSON.stringify(l));
+                        }
                     }
                 } catch (error) {
                     console.error(`Error updating user ${name}:`, error);
+                    // Fallback to localStorage on error
+                    let l = JSON.parse(localStorage.getItem('nexus_users')) || [];
+                    let idx = l.findIndex(u => u.name === name);
+                    if (idx !== -1) {
+                        l[idx] = { ...l[idx], ...data };
+                        localStorage.setItem('nexus_users', JSON.stringify(l));
+                    }
                 }
             }
         };
@@ -354,7 +389,6 @@
             } catch (error) {
                 console.error('Error initializing default users:', error);
             }
-        }
         }
 
         /* --- APP CONTROLLER --- */
